@@ -1,0 +1,6 @@
+# BlockPatterns configuration
+version: 1
+settings:
+  # Example setting to demonstrate BoostedYAML defaulting and comments preservation
+  enabled: true
+  message: "<green>Welcome to <yellow>BlockPatterns<gray>!"
