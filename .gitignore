@@ -2,6 +2,7 @@
 out/
 !**/src/main/**/out/
 !**/src/test/**/out/
+*.iml
 
 ### Kotlin ###
 .kotlin
@@ -30,3 +31,9 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+
+/.gradle/
+/.idea/
+/build/
+/run/
