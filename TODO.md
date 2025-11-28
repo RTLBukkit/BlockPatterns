@@ -101,6 +101,13 @@ BlockPatterns TODO — Implementation Plan Outline
 12. Data Structures & NMS Boundaries
 - Use primitive collections to minimize allocations in hot paths.
 
+- NMS Coding Policy:
+  - Prefer compile-time Mojang-mapped classes over reflection for strong typing and early failures when dev-bundle changes.
+  - Encapsulate all direct NMS usages behind small, well-documented helpers (e.g., a dedicated parser/wrapper class).
+  - For accessing registries, prefer `RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY)` and obtain `HolderLookup` via `lookupOrThrow(Registries.BLOCK)` instead of reflective field/method access.
+  - When upgrading Paper/dev-bundle, update the encapsulated helpers and re-run build/tests; avoid scattering NMS calls across codebase.
+  - Use Bukkit/Paper API fallbacks where feasible to retain functionality when NMS is unavailable.
+
 14. Configuration Surface
 - `config.yml`:
   - global: performance budgets, strategy enable/disable, telemetry toggles, debug verbosity.

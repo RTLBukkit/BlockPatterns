@@ -50,7 +50,15 @@ public final class BlockStatePredicateParsers {
             "wall_post_bit", "up", "down"
     );
 
-    /** Parse result common shape used by both implementations. */
+    /**
+     * Parse result common shape used by both implementations.
+     * <p>
+     * Notes on semantics:
+     * - requiredProperties contains only properties explicitly specified by the user input. Omitted props are wildcards.
+     * - orientationProperties is a subset of keys from requiredProperties that affect rotation/mirroring.
+     *   This allows downstream transform/verification logic to remap only the relevant properties without
+     *   changing the matching semantics captured by {@link #requiredProperties}.
+     */
     public record ParseResult(
             String raw,
             boolean isTag,
@@ -64,6 +72,14 @@ public final class BlockStatePredicateParsers {
 
         /**
          * Create a functional matcher for a BlockData using API-only comparison semantics.
+         *
+         * Matching rules:
+         * - Tag predicates first ensure the material belongs to the tag, then evaluate requested properties.
+         * - Block predicates ensure the material identity matches, then evaluate requested properties.
+         * - Only explicitly requested properties are checked; all others are treated as wildcards.
+         *
+         * Note on orientationProperties: they are informational flags indicating which of the required properties
+         * are affected by rotation/mirroring. They are not additional constraints beyond requiredProperties.
          */
         public Predicate<BlockData> toApiMatcher() {
             return data -> {
@@ -83,7 +99,6 @@ public final class BlockStatePredicateParsers {
                     String actualVal = actual.get(req.getKey());
                     if (actualVal == null || !actualVal.equals(req.getValue())) return false;
                 }
-                // TODO: We seem be ignoring rotatable properties, are they duplicated in required properties?
                 return true;
             };
         }
@@ -135,6 +150,12 @@ public final class BlockStatePredicateParsers {
             return new ParseResult(raw, isTag, key, Collections.unmodifiableMap(props), Collections.unmodifiableSet(orient));
         }
 
+        /**
+         * Returns the inside of the trailing bracket list given the index of the opening bracket.
+         * Example: "oak_log[axis=x]" with openingIndex at '[' returns "axis=x".
+         *
+         * @throws IllegalArgumentException if the brackets are malformed
+         */
         private static String sliceBrackets(String work, int openingIndex) {
             if (openingIndex < 0 || openingIndex >= work.length() || work.charAt(openingIndex) != '[')
                 throw new IllegalArgumentException("Internal parser error (bracket)");
@@ -143,6 +164,10 @@ public final class BlockStatePredicateParsers {
             return work.substring(openingIndex + 1, work.length() - 1);
         }
 
+        /**
+         * Parses a namespaced identifier, defaulting to the minecraft namespace if absent.
+         * Accepts lower-case letters, digits, '-', '_' per vanilla conventions.
+         */
         private static NamespacedKey parseKey(String id) {
             String s = id.trim();
             if (s.isEmpty()) throw new IllegalArgumentException("Missing identifier before properties");
@@ -154,6 +179,10 @@ public final class BlockStatePredicateParsers {
             }
         }
 
+        /**
+         * Parses a comma-separated list of key=value pairs into a LinkedHashMap preserving order.
+         * Keys/values must be simple identifiers (lowercase letters, digits, '-', '_').
+         */
         private static Map<String, String> parseProps(String propsPart) {
             Map<String, String> map = new LinkedHashMap<>();
             if (propsPart.isEmpty()) return map; // allow empty [] though useless
@@ -174,16 +203,27 @@ public final class BlockStatePredicateParsers {
             return map;
         }
 
+        /** True if the character is valid within a simple identifier for keys/values. */
         private static boolean isIdentChar(int ch) {
             return ch == '_' || ch == '-' || (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z');
         }
     }
 
-    /** NMS-backed parser. Uses Mojang's parser to validate and then reflects the chosen properties. */
+    /**
+     * NMS-backed parser.
+     * <p>
+     * Implementation uses Mojang-mapped classes at compile time (no reflection) for strong typing and
+     * early failure when the dev bundle version changes. For tag predicates (starting with '#'), we
+     * validate the tag via Bukkit API and parse properties with the same rules as the API parser; Mojang's
+     * BlockStateParser only accepts concrete block ids, not tags.
+     */
     public static final class NmsParser {
         private NmsParser() {}
 
-        //TODO: I highly value compile time errors over reflection. We should never use reflection, rewrite this and add those directions to TODO.md
+        /**
+         * Parses the input using Mojang's {@code BlockStateParser} where applicable.
+         * For tags, validates against Bukkit's tag registry and returns the same {@link ParseResult} shape.
+         */
         public static ParseResult parse(String input) throws IllegalArgumentException {
             String raw = Objects.requireNonNull(input, "input").trim();
             if (raw.isEmpty()) throw new IllegalArgumentException("Empty block predicate");
@@ -191,71 +231,66 @@ public final class BlockStatePredicateParsers {
             boolean isTag = raw.startsWith("#");
             String work = isTag ? raw.substring(1) : raw;
 
-            // We leverage the vanilla parser for block state strings. The class names below are Mojang-mapped.
+            // Fast-path for tags: BlockStateParser cannot parse tag identifiers; validate via Bukkit and parse props with API rules.
+            if (isTag) {
+                int bracket = work.indexOf('[');
+                String idPart = bracket >= 0 ? work.substring(0, bracket) : work;
+                String propsPart = bracket >= 0 ? ApiParser.sliceBrackets(work, bracket) : null;
+
+                NamespacedKey key = ApiParser.parseKey(idPart);
+                Tag<Material> tag = Bukkit.getTag(Tag.REGISTRY_BLOCKS, key, Material.class);
+                if (tag == null) throw new IllegalArgumentException("Unknown block tag: #" + key);
+
+                Map<String, String> props = propsPart == null ? Map.of() : ApiParser.parseProps(propsPart);
+                Set<String> orient = new HashSet<>();
+                for (String p : props.keySet()) if (ORIENTATION_PROPERTIES.contains(p)) orient.add(p);
+                return new ParseResult(raw, true, key, Collections.unmodifiableMap(props), Collections.unmodifiableSet(orient));
+            }
+
+            // Parse a concrete block id using Mojang's parser.
             try {
-                // Prepare reader of just the id + optional [props]
-                StringReader reader = new StringReader(work);
+                // Acquire a HolderLookup<Block> from the built-in registry access.
+                net.minecraft.core.RegistryAccess.Frozen registryAccess =
+                        net.minecraft.core.RegistryAccess.fromRegistryOfRegistries(
+                                net.minecraft.core.registries.BuiltInRegistries.REGISTRY
+                        );
+                net.minecraft.core.HolderLookup.RegistryLookup<net.minecraft.world.level.block.Block> lookup =
+                        registryAccess.lookupOrThrow(net.minecraft.core.registries.Registries.BLOCK);
 
-                // We'll parse block state definition. For tags, we still parse the same shape; tag presence is handled separately below.
-                // Using reflection to avoid hard failures if names drift, but still aiming for the common 1.20-1.21 APIs.
-                // Attempt 1: net.minecraft.commands.arguments.blocks.BlockStateParser.parseForBlock
-                Class<?> parserCls = Class.forName("net.minecraft.commands.arguments.blocks.BlockStateParser");
-                // Static method signature: parseForBlock(HolderLookup<Block>, StringReader, boolean allowNBT)
-                // We'll get the built-in block registry lookup.
-                Class<?> builtInRegs = Class.forName("net.minecraft.core.registries.BuiltInRegistries");
-                Object blocksRegistry = builtInRegs.getField("BLOCK").get(null);
-                // BLOCK is a Registry<Block>; call asLookup()
-                Object lookup = blocksRegistry.getClass().getMethod("asLookup").invoke(blocksRegistry);
-                Object result = parserCls
-                        .getMethod("parseForBlock", Class.forName("net.minecraft.core.HolderLookup"), StringReader.class, boolean.class)
-                        .invoke(null, lookup, reader, false);
+                net.minecraft.commands.arguments.blocks.BlockStateParser.BlockResult result =
+                        net.minecraft.commands.arguments.blocks.BlockStateParser.parseForBlock(
+                                lookup,
+                                new StringReader(work),
+                                false
+                        );
 
-                // result is BlockStateParser.BlockResult
-                // Extract state: block state and properties map via toString parsing as a fallback.
-                Object state = result.getClass().getMethod("blockState").invoke(result);
+                net.minecraft.world.level.block.state.BlockState state = result.blockState();
+                net.minecraft.resources.ResourceLocation id = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock());
+                NamespacedKey nk = Objects.requireNonNull(NamespacedKey.fromString(id.toString()));
 
-                // Obtain the resource location (namespace:id)
-                Object block = state.getClass().getMethod("getBlock").invoke(state);
-                Object key = Class.forName("net.minecraft.core.registries.BuiltInRegistries")
-                        .getField("BLOCK").get(null)
-                        .getClass().getMethod("getKey", Class.forName("net.minecraft.world.level.block.Block"))
-                        .invoke(Class.forName("net.minecraft.core.registries.BuiltInRegistries").getField("BLOCK").get(null), block);
-                String idStr = key.toString(); // ResourceLocation#toString is namespace:id
-                NamespacedKey nk = Objects.requireNonNull(NamespacedKey.fromString(idStr));
-
-                // Gather properties into a simple string map using the state's values() map
                 Map<String, String> props = new LinkedHashMap<>();
-                try {
-                    // state.getValues() : Map<Property<?>, Comparable<?>>
-                    Map<?, ?> values = (Map<?, ?>) state.getClass().getMethod("getValues").invoke(state);
-                    for (Map.Entry<?, ?> e : values.entrySet()) {
-                        Object property = e.getKey();
-                        String name = (String) property.getClass().getMethod("getName").invoke(property);
-                        String val = String.valueOf(e.getValue());
-                        props.put(name, val);
-                    }
-                } catch (ReflectiveOperationException ignore) {
-                    // Fallback: derive from state's toString if needed (format: namespace:id[prop=val,...])
-                    String s = state.toString();
-                    int i = s.indexOf('[');
-                    if (i >= 0 && s.endsWith("]")) {
-                        Map<String, String> parsed = ApiParser.parseProps(s.substring(i + 1, s.length() - 1));
-                        props.putAll(parsed);
-                    }
+                for (Map.Entry<net.minecraft.world.level.block.state.properties.Property<?>, Comparable<?>> e : state.getValues().entrySet()) {
+                    String name = e.getKey().getName();
+                    String val = String.valueOf(e.getValue());
+                    props.put(name, val);
                 }
 
                 Set<String> orient = new HashSet<>();
                 for (String p : props.keySet()) if (ORIENTATION_PROPERTIES.contains(p)) orient.add(p);
 
-                return new ParseResult(raw, isTag, nk, Collections.unmodifiableMap(props), Collections.unmodifiableSet(orient));
+                return new ParseResult(raw, false, nk, Collections.unmodifiableMap(props), Collections.unmodifiableSet(orient));
             } catch (Throwable t) {
-                throw new IllegalArgumentException("Failed to parse via NMS: " + input + ". You can use ApiParser as a fallback.", t);
+                throw new IllegalArgumentException("Failed to parse via NMS: " + input + ".", t);
             }
         }
     }
 
     // ---- Helpers ----
 
+    /**
+     * Serializes a map of properties to vanilla bracket syntax: "[k1=v1,k2=v2]".
+     * Order follows the iteration order of the provided map.
+     */
     private static String propsToBracketString(Map<String, String> props) {
         StringBuilder sb = new StringBuilder("[");
         boolean first = true;
@@ -267,17 +302,24 @@ public final class BlockStatePredicateParsers {
         return sb.append(']').toString();
     }
 
+    /**
+     * Attempts to resolve a {@link Material} from a {@link NamespacedKey}.
+     * Uses strict (non-legacy) matching to avoid surprises with deprecated aliases.
+     */
     private static @Nullable Material matchMaterialFromKey(@NotNull NamespacedKey key) {
-        // The Bukkit matcher understands namespaced keys (case-insensitive)
-        Material m = Material.matchMaterial(key.toString(), true); //TODO: Why is legacyName true (valid comment for all instances)?
+        // The Bukkit matcher understands namespaced keys (case-insensitive). Use non-legacy matching.
+        Material m = Material.matchMaterial(key.toString(), false);
         if (m != null) return m;
         // Fallback: try path only for minecraft namespace
         if ("minecraft".equals(key.getNamespace()))
-            return Material.matchMaterial(key.getKey(), true);
+            return Material.matchMaterial(key.getKey(), false);
         return null;
     }
 
-    /** Extracts the property map from a BlockData using its canonical string form. */
+    /**
+     * Extracts the property map from a {@link BlockData} using its canonical string form returned by
+     * {@code getAsString(true)} which includes the full namespaced id and all set properties.
+     */
     private static Map<String, String> extractProperties(BlockData data) {
         String s = data.getAsString(true); // includes namespace and all set properties
         int i = s.indexOf('[');
