@@ -26,6 +26,9 @@ repositories {
     maven("https://repo.lucko.me/")
 }
 
+
+val mockitoAgent = configurations.create("mockitoAgent")
+
 dependencies {
     // Paper userdev (experimental). This provides the dev bundle for compilation & remapping.
     paperweightDevelopmentBundle("io.papermc.paper:dev-bundle:1.21.10-R0.1-SNAPSHOT")
@@ -37,6 +40,16 @@ dependencies {
     implementation("org.incendo:cloud-paper:2.0.0-beta.10") // shade
     implementation("me.lucko:helper:5.6.13") // shade
     implementation("dev.dejvokep:boosted-yaml:1.3.5") // shade
+
+    // --- Testing ---
+    testImplementation(platform("org.junit:junit-bom:5.11.3"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("org.mockito:mockito-core:5.+")
+    mockitoAgent("org.mockito:mockito-core:5.+") { isTransitive = false }
+    // Include Paper dev-bundle on the test classpath so we can compile & run unit tests that use NMS classes
+    // Note: This brings in deobfuscated server classes suitable for unit testing simple value types (e.g., BlockPos, Direction)
+    testImplementation("io.papermc.paper:dev-bundle:1.21.10-R0.1-SNAPSHOT")
 }
 
 tasks.processResources {
@@ -51,6 +64,12 @@ tasks.withType<Javadoc>().configureEach {
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
     options.release = 25
+}
+
+tasks.test {
+    useJUnitPlatform()
+    systemProperty("file.encoding", "UTF-8")
+    jvmArgs.add("-javaagent:${mockitoAgent.asPath}")
 }
 
 tasks.jar {
@@ -76,6 +95,7 @@ tasks.shadowJar {
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
     }
 }
+
 tasks.runServer {
     minecraftVersion("1.21.10")
 }
