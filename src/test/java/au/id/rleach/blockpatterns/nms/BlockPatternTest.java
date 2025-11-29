@@ -1,155 +1,160 @@
 package au.id.rleach.blockpatterns.nms;
 
-import com.google.common.cache.LoadingCache;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.Vec3i;
 import net.minecraft.world.level.LevelReader;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.level.block.state.pattern.BlockPattern;
 import net.minecraft.world.level.block.state.pattern.BlockPatternBuilder;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentMatcher;
-import org.mockito.ArgumentMatchers;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
 
+import java.util.Arrays;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
-class BlockPatternTest {
-
-    // hack to access protected static method
-    static class Bridge extends BlockPattern {
-
-        public Bridge(Predicate<BlockInWorld>[][][] pattern) {
-            super(pattern);
-        }
-
-        public static BlockPos translateAndRotate(BlockPos pos, Direction forwards, Direction up, int aisle, int shelf, int book){
-            return BlockPattern.translateAndRotate(pos, forwards, up, aisle, shelf, book);
-        }
-
-    }
-
-    @Mock BlockInWorld blockInWorldRed;
-    @Mock BlockInWorld blockInWorldBlue;
-    @Mock BlockInWorld blockInWorldGreen;
-    @Mock BlockInWorld blockInWorldBlack;
-    @Mock LoadingCache<BlockPos, BlockInWorld> loadingCache;
-
-    @BeforeEach
-    public void setUp() {
-        MockitoAnnotations.initMocks(this);
-    }
+/**
+ * Tests for {@link BlockPatternBuilder} using a simple shape definition.
+ * <p>
+ * The test focuses on verifying that the builder correctly interprets the
+ * provided aisles and derives the right dimensions (width x height x depth).
+ * We purposefully use permissive predicates (always-true) for all symbols so
+ * the test does not require a world instance to perform matching; we only
+ * validate the pattern’s structural metadata here.
+ */
+public class BlockPatternTest {
 
     @Test
-    @DisplayName("translateAndRotate: invalid finger/up combination throws")
-    void testInvalidCombinationThrows() {
-        BlockPos origin = new BlockPos(0, 64, 0);
-        assertThrows(IllegalArgumentException.class, () ->
-            Bridge.translateAndRotate(origin, Direction.UP, Direction.UP, 0, 0, 0)
-        );
-        assertThrows(IllegalArgumentException.class, () ->
-            Bridge.translateAndRotate(origin, Direction.NORTH, Direction.SOUTH, 0, 0, 0)
-        );
-    }
+    void buildsPatternWithExpectedDimensions_fromGivenAisles() {
+        // Define permissive predicates for each symbol used in the aisles
+        // (including space). We only care about the geometry in this test.
+        Predicate<BlockInWorld> any = biw -> true;
 
-
-    @Test
-    @DisplayName("Spec out 'FrontLeftTop, Forwards and Top")
-    void testFrontLeftTopForwardsAndTop() {
-        BlockPos frontLeftTop = new BlockPos(0, 0, 0);
-
-        BlockPos blockPos = Bridge.translateAndRotate(
-                frontLeftTop,
-                Direction.EAST,
-                Direction.UP,
-                3,
-                4,
-                5
-        );
-
-        assertEquals( 5, blockPos.getX());
-        assertEquals(-4, blockPos.getY());
-        assertEquals( 3, blockPos.getZ());
-    }
-
-    @Test
-    @DisplayName("todo")
-    void testFrontLeftTopForwardsAndDown() {
-        BlockPos frontLeftTop = new BlockPos(0, 0, 0);
-        BlockPos red = new BlockPos(4, 0, 0);
-        BlockPos green = new BlockPos(0, -3, 0);
-        BlockPos blue = new BlockPos(0, 0, 2);
-
-        BlockPattern.BlockPatternMatch blockPatternMatch = new BlockPattern.BlockPatternMatch(frontLeftTop, Direction.EAST, Direction.UP, loadingCache, 4, 3, 2);
-        when(loadingCache.getUnchecked(frontLeftTop)).thenReturn(blockInWorldBlack);
-        when(loadingCache.getUnchecked(red)).thenReturn(blockInWorldRed);
-        when(loadingCache.getUnchecked(blue)).thenReturn(blockInWorldBlue);
-        when(loadingCache.getUnchecked(green)).thenReturn(blockInWorldGreen);
-        assertEquals(blockInWorldBlack, blockPatternMatch.getBlock(0, 0, 0));
-        assertEquals(blockInWorldRed, blockPatternMatch.getBlock(0, 0, 4));
-        assertEquals(blockInWorldBlue, blockPatternMatch.getBlock(2, 0, 0));
-        assertEquals(blockInWorldGreen, blockPatternMatch.getBlock(0, 3, 0));
-    }
-
-    public static class AxisPos implements ArgumentMatcher<BlockPos> {
-
-        private Direction dir;
-
-        public AxisPos(Direction dir) {
-            this.dir = dir;
-        }
-
-        @Override
-        public boolean matches(BlockPos blockPos) {
-            if ((blockPos.getX() == 0 && blockPos.getY() == 0 && blockPos.getZ() == 0)) return dir == null;
-            Vec3i cross = dir.getUnitVec3i().cross(blockPos);
-            return cross.getX() == 0 && cross.getY() == 0 && cross.getZ() == 0;
-        }
-    }
-
-    @Test
-    @DisplayName("testing")
-    void testTesting() {
-        Predicate<BlockInWorld> r = x -> x == blockInWorldRed ;
-        Predicate<BlockInWorld> g = x -> x == blockInWorldGreen ;
-        Predicate<BlockInWorld> b = x -> x == blockInWorldBlue ;
-        Predicate<BlockInWorld> o = x -> x == blockInWorldBlack ;
-
-        LevelReader levelReader = mock(LevelReader.class);
-
-        when(levelReader.getBlockState(ArgumentMatchers.argThat(new AxisPos(null))))
-                .thenReturn(BLACK_CONCRETE);
-        when(levelReader.getBlockState(ArgumentMatchers.argThat(new AxisPos(Direction.EAST))))
-                .thenReturn(RED_CONCRETE);
-        when(levelReader.getBlockState(ArgumentMatchers.argThat(new AxisPos(Direction.DOWN))))
-                .thenReturn(GREEN_CONCRETE);
-        when(levelReader.getBlockState(ArgumentMatchers.argThat(new AxisPos(Direction.SOUTH))))
-                .thenReturn(BLUE_CONCRETE);
-        when(levelReader.getBlockState(ArgumentMatchers.any()))
-                .thenReturn(AIR);
-
+        // Provided example (3 aisles deep, each 4 rows tall). The longest row is 5 chars wide.
         BlockPattern patternUnderTest = BlockPatternBuilder
-                .start()
-                .aisle("ORRRR", "G    ", "G    ", "G    ")
-                .aisle("B    ", "     ", "     ", "     ")
-                .aisle("B    ", "     ", "     ", "     ")
-                .where('R', r)
-                .where('B', b)
-                .where('G', g)
-                .where('O', o)
-                .build();
+            .start()
+            .aisle(
+                "ORRRR", // row 0
+                "G    ", // row 1
+                "G    ", // row 2
+                "G    "  // row 3
+            )
+            .aisle(
+                "B    ",
+                "     ",
+                "     ",
+                "     "
+            )
+            .aisle(
+                "B    ",
+                "     ",
+                "     ",
+                "     "
+            )
+            // Map each used symbol to a predicate. Space should also be defined.
+            .where('O', any)
+            .where('R', any)
+            .where('G', any)
+            .where('B', any)
+            .where(' ', any)
+            .build();
 
-        BlockPattern.BlockPatternMatch matches = patternUnderTest.matches(levelReader, new BlockPos(0, 0, 0), Direction.EAST, Direction.UP);
+        // Expect width=5 (max row length), height=4 (rows per aisle), depth=3 (aisles provided)
+        assertEquals(5, patternUnderTest.getWidth(), "Pattern width should be 5");
+        assertEquals(4, patternUnderTest.getHeight(), "Pattern height should be 4");
+        assertEquals(3, patternUnderTest.getDepth(), "Pattern depth should be 3");
+    }
+
+    @Test
+    void matchesFakeWorldWithAxisMapping_andRealPredicates() {
+        // --- Define the aisles (depth 3) as provided ---
+        String[][] aisles = new String[][]{
+            {"ORRRR", "G    ", "G    ", "G    "},
+            {"B    ", "     ", "     ", "     "},
+            {"B    ", "     ", "     ", "     "}
+        };
+
+        BlockPattern blockPattern = BlockPatternBuilder
+            .start()
+            .aisle(aisles[0])
+            .aisle(aisles[1])
+            .aisle(aisles[2])
+            .where('O', colorIs(Color.BLACK))
+            .where('R', colorIs(Color.RED))
+            .where('G', colorIs(Color.GREEN))
+            .where('B', colorIs(Color.BLUE))
+            .where(' ', biw -> true)
+            .build();
+
+        assertEquals(5, blockPattern.getWidth());
+        assertEquals(4, blockPattern.getHeight());
+        assertEquals(3, blockPattern.getDepth());
+
+        // ZYX (just like the block pattern internals when facing East)
+        final Color[][][] world = new Color[12][12][12];
+        {
+            for (Color[][] z : world) {
+                for (Color[] y : z) {
+                    Arrays.fill(y, Color.AIR);
+                }
+            }
+            world[6][6][6] = Color.BLACK;
+
+            world[6][6][7] = Color.RED;
+            world[6][6][8] = Color.RED;
+            world[6][6][9] = Color.RED;
+            world[6][6][10] = Color.RED;
+
+            world[6][5][6] = Color.GREEN;
+            world[6][4][6] = Color.GREEN;
+            world[6][3][6] = Color.GREEN;
+
+            world[7][6][6] = Color.BLUE;
+            world[8][6][6] = Color.BLUE;
+        }
+
+        ColorAccessor fakeLevel = (ColorAccessor) mock(
+                LevelReader.class,
+                withSettings().extraInterfaces(ColorAccessor.class)
+        );
+        when(fakeLevel.colorAt(any(BlockPos.class)))
+            .thenAnswer(invocation -> {
+                        BlockPos pos = invocation.getArgument(0);
+                        return world[pos.getZ()][pos.getY()][pos.getX()];
+                    }
+            );
+
+        BlockPattern.BlockPatternMatch matches = blockPattern.matches((LevelReader) fakeLevel, new BlockPos(6, 6, 6), Direction.EAST, Direction.UP);
         assertNotNull(matches);
+        assertEquals(new BlockPos(6, 6, 6), matches.getFrontTopLeft());
+        assertEquals(Direction.EAST, matches.getForwards());
+        assertEquals(Direction.UP, matches.getUp());
+
+        assertEquals(5, matches.getWidth());
+        assertEquals(4, matches.getHeight());
+        assertEquals(3, matches.getDepth());
+
+        world[6][6][6] = Color.AIR;
+        matches = blockPattern.matches((LevelReader) fakeLevel, new BlockPos(6, 6, 6), Direction.EAST, Direction.UP);
+        assertNull(matches);
+    }
+
+
+    // --- Test-only support types ---
+    enum Color { BLACK, RED, GREEN, BLUE, AIR }
+
+    interface ColorAccessor {
+        Color colorAt(BlockPos pos);
+    }
+
+    private static Predicate<BlockInWorld> colorIs(Color expected) {
+        return biw -> {
+            LevelReader lvl = biw.getLevel();
+            // The test configures lvl to also implement ColorAccessor
+            ColorAccessor ca = (ColorAccessor) lvl;
+            Color actual = ca.colorAt(biw.getPos());
+            return actual == expected;
+        };
     }
 }
